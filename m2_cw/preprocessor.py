@@ -134,7 +134,7 @@ def load_and_preprocess(data_path: str):
             - train_texts (list of str): Training set event strings.
             - val_texts (list of str): Validation set event strings.
     """
-    data_path = Path(__file__).parent / data_path
+    data_path = Path(__file__).parent.parent / data_path
     
     # Read the original data
     time_data, traj_data = read_data(data_path) 
