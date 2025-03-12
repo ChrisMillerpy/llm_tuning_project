@@ -1,0 +1,37 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+env/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Logs and temporary files
+*.log
+*.out
+*.tmp
+*.swp
+*.swo
+
+# HDF5 files
+*.h5
+
+# PDF and other generated documents
+*.pdf
+
+# Dependency files
+pip-wheel-metadata/
+*.egg-info/
+dist/
+build/
+
+# VSCode settings (if applicable)
+.vscode/
+
+# macOS system files
+.DS_Store
