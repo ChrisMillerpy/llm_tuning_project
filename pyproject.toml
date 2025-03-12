@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=50.0", "wheel", "setuptools_scm", "packaging>=20.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "m2_cw"
+dynamic = ["version"]
+requires-python = ">=3.9"
+description = "My m2 coursework"
+authors = [{ name = "Chris Miller", email = "clm96@cam.ac.uk" }]
+keywords=[]
+classifiers=[]
+dependencies = [
+    "transformers>=4.49.0",
+    "torch>=2.6.0",
+    "accelerate>=1.4.0",
+    "tqdm",
+    "numpy>=2.2.3",
+    "h5py>=3.13.0 ",
+]
+
+[tool.setuptools_scm]
+write_to = "m2_cw/version.py"
+
+[tool.setuptools.packages.find]
+where = ["."]
