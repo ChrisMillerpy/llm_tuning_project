@@ -17,6 +17,7 @@ dependencies = [
     "tqdm",
     "numpy>=2.2.3",
     "h5py>=3.13.0 ",
+    "einops",
 ]
 
 [tool.setuptools_scm]
