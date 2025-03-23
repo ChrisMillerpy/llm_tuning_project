@@ -2,6 +2,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 from einops import rearrange, repeat
+import torch
 
 
 def read_data(data_path):
@@ -108,7 +109,7 @@ def save(texts, save_path):
         for string in texts:
             f.write(string + "\n")
 
-def load_and_preprocess(data_path: str, alpha: int = 90, decimal_places: int = 2, random_seed: int = 42):
+def load_and_preprocess(data_path: str="data/lotka_volterra_data.h5", alpha: int = 90, decimal_places: int = 2, random_seed: int = 42):
     """
     Loads trajectory data, preprocesses it, and saves test data to a file.
 
@@ -121,7 +122,7 @@ def load_and_preprocess(data_path: str, alpha: int = 90, decimal_places: int = 2
     Returns:
         tuple: Lists of train and validation texts.
     """
-    data_path = Path(__file__).parent.parent / data_path
+    data_path = Path(__file__).parent.parent.parent / data_path
     
     # Read the original data
     data = read_data(data_path) 
@@ -137,3 +138,43 @@ def load_and_preprocess(data_path: str, alpha: int = 90, decimal_places: int = 2
     save(test_texts, save_path)
     
     return train_texts, val_texts
+
+def load(data_path: str="data/lotka_volterra_data.h5"):
+    data_path = Path(__file__).parent.parent.parent / data_path
+    
+    # Read the original data
+    data = read_data(data_path) 
+
+    return data
+
+def chunk_sequences(texts, tokenizer, max_length=512, stride=256):
+    """
+    Tokenizes and chunks text sequences for training.
+
+    Args:
+        texts (list[str]): List of text sequences.
+        tokenizer: The tokenizer used to convert text to tokens.
+        max_length (int): Maximum sequence length per chunk.
+        stride (int): Step size for sliding window tokenization.
+
+    Returns:
+        torch.Tensor: A tensor containing tokenized and chunked sequences.
+    """
+    all_input_ids = []
+    for text in texts:
+        # Apply Qwen's tokenization scheme to the text:
+        encoding = tokenizer(text, return_tensors="pt", add_special_tokens=False)
+        seq_ids = encoding.input_ids[0]
+
+        # Create sliding windows to further divide the data into chunks:
+        for i in range(0, len(seq_ids), stride):
+            chunk = seq_ids[i : i + max_length]
+            if len(chunk) < max_length:
+                chunk = torch.cat(
+                    [
+                        chunk,
+                        torch.full((max_length - len(chunk),), tokenizer.pad_token_id),
+                    ]
+                )
+            all_input_ids.append(chunk)
+    return torch.stack(all_input_ids)
