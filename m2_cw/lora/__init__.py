@@ -1,1 +1,1 @@
-from .lora import LoraLinear, add_LoRA
+from .lora import LoRALinear, add_LoRA

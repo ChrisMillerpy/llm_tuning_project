@@ -3,7 +3,7 @@ from ..preprocessing.preprocessor import load_and_preprocess
 import matplotlib.pyplot as plt
 
 
-def string_to_array(string, trim=20):
+def string_to_array(string, trim=80):
     time_steps = string.split(";")[:trim]
     array = []
     for step in time_steps:
@@ -31,6 +31,6 @@ def load_forecast(file_path):
                 pass
 
     for k, v in forecasts.items():
-        forecasts[k] = string_to_array(v)
+        forecasts[k] = string_to_array(v, trim=20)
 
     return forecasts

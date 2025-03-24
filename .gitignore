@@ -17,6 +17,7 @@ env/
 *.tmp
 *.swp
 *.swo
+wandb/
 
 # HDF5 files
 *.h5
@@ -35,3 +36,6 @@ build/
 
 # macOS system files
 .DS_Store
+
+# Models
+*.pth

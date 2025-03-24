@@ -3,6 +3,8 @@ import h5py
 import numpy as np
 from einops import rearrange, repeat
 import torch
+from ..qwen.qwen import TokenConverter
+from .series import get_evaluation_ids
 
 
 def read_data(data_path):
@@ -38,7 +40,7 @@ def scale_and_round(data, alpha=90, decimal_places=2):
     Returns:
         np.ndarray: Scaled and rounded trajectory data.
     """
-    train = data[:, :60, :]
+    train = data[:, :80, :]
 
     train_flattened = rearrange(train, "b x y -> b (x y)")
 
@@ -46,7 +48,7 @@ def scale_and_round(data, alpha=90, decimal_places=2):
 
     data_scaled = 10 * data / train_percentiles
 
-    data_scaled_and_rounded = np.round(data_scaled, decimals=decimal_places)
+    data_scaled_and_rounded = ( 10**decimal_places * np.round(data_scaled, decimals=decimal_places)).astype(int)
 
     return data_scaled_and_rounded
 
@@ -68,12 +70,11 @@ def preprocess_series(series):
         next_entry = f"{prey_str},{pred_str}"
         series_list.append(next_entry)
     
-    s1, s2 = 60, 80
-    train_string = ";".join(series_list[:s1]) + ";"
-    val_string = ";".join(series_list[s1:s2]) + ";"
-    test_string = ";".join(series_list[s2:]) + ";"
+    split = 80
+    start_string = ";".join(series_list[:split]) + ";"
+    end_string = ";".join(series_list[split:]) + ";"
 
-    return train_string, val_string, test_string
+    return start_string, end_string
 
 def preprocess(data):
     """
@@ -85,15 +86,23 @@ def preprocess(data):
     Returns:
         tuple: Lists of train, validation, and test texts.
     """
-    train_texts = []
-    val_texts = []
-    test_texts = []
+    val_ids, test_ids = get_evaluation_ids()
+    train_texts = {}
+    val_texts = {}
+    test_texts = {}
 
     for series_id in range(data.shape[0]):
-        train_string, val_string, test_string = preprocess_series(data[series_id, :, :])
-        train_texts.append(train_string)
-        val_texts.append(val_string)
-        test_texts.append(test_string)
+        # Format from numbers to strings
+        start_string, end_string = preprocess_series(data[series_id, :, :])
+        # If it is one of the series that we evaluate on, then add separate strings to train, val, test
+        if series_id in val_ids:
+            val_texts[series_id] = [start_string, end_string]
+        elif series_id in test_ids:
+            test_texts[series_id] = [start_string, end_string]
+        else:
+            train_texts[series_id] = start_string + end_string
+            
+
     
     return train_texts, val_texts, test_texts
 
@@ -109,7 +118,7 @@ def save(texts, save_path):
         for string in texts:
             f.write(string + "\n")
 
-def load_and_preprocess(data_path: str="data/lotka_volterra_data.h5", alpha: int = 90, decimal_places: int = 2, random_seed: int = 42):
+def load_and_preprocess(data_path: str="data/lotka_volterra_data.h5", alpha: int = 90, decimal_places: int = 2, random_seed: int = 42, eval=False):
     """
     Loads trajectory data, preprocesses it, and saves test data to a file.
 
@@ -132,12 +141,11 @@ def load_and_preprocess(data_path: str="data/lotka_volterra_data.h5", alpha: int
     
     # Preprocess the the serieses into strings
     train_texts, val_texts, test_texts = preprocess(data)
-
-    # Save the test set
-    save_path = data_path.parent / "test_texts.txt"
-    save(test_texts, save_path)
     
-    return train_texts, val_texts
+    if eval:
+        return train_texts, val_texts, test_texts
+    else:
+        return train_texts
 
 def load(data_path: str="data/lotka_volterra_data.h5"):
     data_path = Path(__file__).parent.parent.parent / data_path
@@ -147,7 +155,7 @@ def load(data_path: str="data/lotka_volterra_data.h5"):
 
     return data
 
-def chunk_sequences(texts, tokenizer, max_length=512, stride=256):
+def chunk_sequences(texts, tokenizer, converter, max_length=512, stride=256):
     """
     Tokenizes and chunks text sequences for training.
 
@@ -160,21 +168,28 @@ def chunk_sequences(texts, tokenizer, max_length=512, stride=256):
     Returns:
         torch.Tensor: A tensor containing tokenized and chunked sequences.
     """
+    # Ensure we have a converter to convert to reduced tokens
+    if not isinstance(converter, TokenConverter):
+        raise TypeError("Token Converter is not valid.")
+
     all_input_ids = []
-    for text in texts:
+    for idx, text in texts.items():
         # Apply Qwen's tokenization scheme to the text:
         encoding = tokenizer(text, return_tensors="pt", add_special_tokens=False)
+
+        encoding = converter.to(encoding)
+
         seq_ids = encoding.input_ids[0]
 
         # Create sliding windows to further divide the data into chunks:
         for i in range(0, len(seq_ids), stride):
+            # If our window overshoots the series
+            if i + max_length > len(seq_ids):
+                # reset to perfectly cover last part
+                i = len(seq_ids) - max_length
+            # slice the sequence to make the chunk
             chunk = seq_ids[i : i + max_length]
-            if len(chunk) < max_length:
-                chunk = torch.cat(
-                    [
-                        chunk,
-                        torch.full((max_length - len(chunk),), tokenizer.pad_token_id),
-                    ]
-                )
+
             all_input_ids.append(chunk)
+
     return torch.stack(all_input_ids)

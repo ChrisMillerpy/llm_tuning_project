@@ -1,335 +1,204 @@
-### DEFAULT VALUES
-hidden_features = 4864
-vocabulary_size = 13
-embedding_dimension = 896
-sequence_length = 512
-attention_heads = 14
-transformer_layers = 24
-lookup_table = False
-mode = "training"
-generation_length = 20 * 13
-batch_size = 1
-lora_rank = 4
+from dataclasses import dataclass
 
-def flops_linear(in_features,
-                 out_features,
-                 sequence_length, 
-                 bias=True):
+@dataclass
+class FlopsConfig:
+    hidden_features: int = 4864
+    vocabulary_size: int = 13
+    embedding_dimension: int = 896
+    sequence_length: int = 512
+    attention_heads: int = 14
+    transformer_layers: int = 24
+    lookup_table: bool = False
+    mode: str = "training"
+    generation_length: int = 20 * 13
+    batch_size: int = 4
+    lora_rank: int = 4
+
+@dataclass
+class InferenceConfig(FlopsConfig):
+    sequence_length: int = 512
+    mode: str = "inference"
+    generation_length: int = 20 * 13
+    batch_size: int = 1
+    lora_rank: int = 4
+
+@dataclass
+class TrainConfig(FlopsConfig):
+    sequence_length: int = 512
+    mode: str = "training"
+    batch_size: int = 4
+    lora_rank: int = 4
+
+
+def flops_matrix_mult(matrix_1_dim, matrix_2_dim):
     """
-    Compute the number of floating-point operations (FLOPs) for a linear (fully connected) layer.
-
-    Args:
-        in_features (int): Number of input features.
-        out_features (int): Number of output features.
-        sequence_length (int): Length of the input sequence.
-        bias (bool): Whether the layer includes a bias term.
-
-    Returns:
-        int: Total FLOPs for the linear layer.
+    Calculate FLOPs for a matrix multiplication.
     """
-    flops = 0
-    flops += sequence_length * out_features * (2 * in_features - 1) # Flops for inputs * weights
-    if bias: flops += out_features * sequence_length # Flops for bias
+    a, b = matrix_1_dim
+    c, d = matrix_2_dim
+    assert b == c
+
+    flops = a * d * (2 * b - 1)
     return flops
 
-def flops_silu(in_features,
-               sequence_length):
+
+def flops_linear(in_features: int, out_features: int, sequence_length: int, bias: bool = True) -> int:
+    """
+    Calculate FLOPs for a linear (fully connected) layer.
+    WX + B
+    """
+    m1 = (out_features, in_features) # W
+    m2 = (in_features, sequence_length) # X
+    flops = flops_matrix_mult(m1, m2) # W@X
+
+    if bias:
+        flops += out_features * sequence_length # + B
+    return flops
+
+def flops_silu(in_features: int, sequence_length: int) -> int:
     """
     Estimate FLOPs for SiLU (Sigmoid Linear Unit) activation.
-
-    Args:
-        in_features (int): Number of input features.
-        sequence_length (int): Length of the input sequence.
-
-    Returns:
-        int: Total FLOPs for SiLU activation.
     """
-    flops = 13 * in_features * sequence_length
-    return flops
+    return 13 * in_features * sequence_length
 
-def flops_mlp(in_features=embedding_dimension,
-              hidden_features=hidden_features,
-              out_features=embedding_dimension,
-              sequence_length=sequence_length):
+def flops_mlp(config: FlopsConfig) -> int:
     """
-    Compute the FLOPs for a feed-forward MLP block with SiLU-based activation.
-
-    Args:
-        in_features (int): Number of input features.
-        hidden_features (int): Number of hidden units in the MLP.
-        out_features (int): Number of output features.
-        sequence_length (int): Length of the input sequence.
-
-    Returns:
-        int: Total FLOPs for the MLP block.
+    Compute FLOPs for a feed-forward MLP block with SiLU activation.
     """
     flops = 0
-    flops += flops_linear(in_features=in_features, out_features=hidden_features, sequence_length=sequence_length, bias=False) # up projection flops
-    flops += flops_linear(in_features=in_features, out_features=hidden_features, sequence_length=sequence_length, bias=False) # gate projection flops
-    flops += hidden_features * sequence_length # up proj * gate proj flops
-    flops += flops_linear(in_features=hidden_features, out_features=out_features, sequence_length=sequence_length, bias=False) # down projection flops
-    flops += flops_silu(in_features=out_features, sequence_length=sequence_length) # Flops of swiglu activation
+    ed, hf, sl = config.embedding_dimension, config.hidden_features, config.sequence_length
+    flops += flops_linear(ed, hf, sl, bias=False)
+    flops += flops_linear(ed, hf, sl, bias=False)
+    flops += hf * sl
+    flops += flops_linear(hf, ed, sl, bias=False)
+    flops += flops_silu(ed, sl)
     return flops
 
-def flops_rmsnorm(in_features,
-                  sequence_length):
+def flops_rmsnorm(in_features: int, sequence_length: int) -> int:
     """
-    Estimate FLOPs for RMSNorm normalization.
-
-    Args:
-        in_features (int): Number of input features.
-        sequence_length (int): Length of the input sequence.
-
-    Returns:
-        int: Total FLOPs for RMSNorm.
+    Estimate FLOPs for RMSNorm.
     """
-    flops = ( 3 * in_features + 11 ) * sequence_length
+    return (3 * in_features + 11) * sequence_length
+
+def flops_lora(config: FlopsConfig) -> int:
+    """
+    Estimate FLOPs for a LoRA (Low-Rank Adaptation) layer.
+    """
+    flops = 0
+    if config.lora_rank == 0:
+        return flops
+    ed, r, sl, heads = config.embedding_dimension, config.lora_rank, config.sequence_length, config.attention_heads
+    hd = ed / heads # Calculate the dimension of each head
+
+    datam = (hd, sl) # Data matrix
+    LoRA1 = (r, hd) # LoRA matrix 1
+    resultm = (r, sl) # result = LoRA1 @ datam
+    LoRA2 = (hd, r) # LoRA matrix 2
+    flops += flops_matrix_mult(LoRA1, datam) # LoRA1 @ datam
+    flops += flops_matrix_mult(LoRA2, resultm) # LoRA2 @ resultm
+
     return flops
 
-def flops_self_atte(embedding_dimension=embedding_dimension,
-                    attention_heads=attention_heads,
-                    sequence_length=sequence_length,
-                    mode=mode,
-                    lora_rank=lora_rank):
+def flops_self_attention(config: FlopsConfig) -> int:
     """
     Compute FLOPs for a multi-head self-attention block.
-
-    Args:
-        embedding_dimension (int): Dimension of the embedding vectors (should be divisible by attention_heads).
-        attention_heads (int): Number of attention heads.
-        sequence_length (int): Length of the input sequence.
-
-    Returns:
-        int: Total FLOPs for the self-attention block.
     """
     flops = 0
-    for _ in range(attention_heads):
-        head_features = embedding_dimension // attention_heads
+    ed, sl, heads, mode = config.embedding_dimension, config.sequence_length, config.attention_heads, config.mode
+
+    for _ in range(heads):
+        head_dim = ed // heads
+
         if mode == "training":
-            flops += flops_linear(in_features=head_features,
-                                out_features=head_features,
-                                sequence_length=sequence_length,
-                                bias=True) # flops for queries linear layer
+            flops += flops_linear(head_dim, head_dim, sl) # Q
+            flops += flops_lora(config) # LoRA Q
+            flops += flops_linear(head_dim, head_dim, sl) # K
+            flops += flops_lora(config) # LoRA K
+            flops += flops_linear(head_dim, head_dim, sl) # V
+        else:
+            # Reduced computation because we have cached K, Q, V vectors from the last stage
+            flops += flops_linear(head_dim, head_dim, 1) # Q_N+1
+            flops += flops_lora(config) # LoRA Q
+            flops += flops_linear(head_dim, head_dim, 1) # K_N+1 
+            flops += flops_lora(config) # LoRA K
+            flops += flops_linear(head_dim, head_dim, 1) # V_N+1
 
-            flops += flops_lora(embedding_dimension=embedding_dimension,
-                                lora_rank=lora_rank,
-                                sequence_length=sequence_length) # flops for lora on queries
+        flops += 2 * head_dim * sl # Adding lora result back onto K and Q matrices
 
-            flops += flops_linear(in_features=head_features,
-                                out_features=head_features,
-                                sequence_length=sequence_length,
-                                bias=True) # flops for keys linear layer
-
-            flops += flops_lora(embedding_dimension=embedding_dimension,
-                                lora_rank=lora_rank,
-                                sequence_length=sequence_length) # flops for lora on keys
-
-            flops += flops_linear(in_features=head_features,
-                                out_features=head_features,
-                                sequence_length=sequence_length,
-                                bias=True) # flops for values linear layer
-        elif mode == "inference":
-            flops += flops_linear(in_features=head_features, 
-                                  out_features=head_features,
-                                  sequence_length=1,
-                                  bias=True) # Flops for calculating the next query
-
-            flops += flops_lora(embedding_dimension=embedding_dimension,
-                                sequence_length=sequence_length,
-                                lora_rank=lora_rank) # flops for lora on queries
-
-            flops += flops_linear(in_features=head_features,
-                                  out_features=head_features,
-                                  sequence_length=1,
-                                  bias=True) # Flops for next key
-
-            flops += flops_lora(embedding_dimension=embedding_dimension,
-                                lora_rank=lora_rank,
-                                sequence_length=sequence_length) # flops for lora on queries
-
-            flops += flops_linear(in_features=head_features,
-                                  out_features=head_features,
-                                  sequence_length=1,
-                                  bias=True) # Flops for next query
-
-        flops += 2 * head_features * sequence_length # flops for adding the rotary positional embeddings
         if mode == "training":
-            flops += sequence_length * sequence_length * ( 2 * head_features - 1 ) # flops for K^T Q
-        elif mode == "inference":
-            flops += sequence_length * (2 * head_features - 1) # flops for only the new query and key dot products
-        if mode == "training":
-            flops += sequence_length * sequence_length + 10 # flops for sqrt(D) then N**2 divisions
-        elif mode == "inference":
-            flops += sequence_length + 10 # flops for normalising the new query and key dot products
-        flops += sequence_length * sequence_length # flops for adding the causal self attention mask
-        flops += sequence_length * ( 10 * sequence_length + sequence_length - 1 + sequence_length ) # flops for softmax on columns
-        flops += head_features * 1 * (2 * embedding_dimension - 1) # flops for one attention score * values
-    
-    flops += flops_linear(in_features=embedding_dimension, out_features=embedding_dimension, sequence_length=sequence_length, bias=False)
+            flops += flops_matrix_mult((sl, head_dim), (head_dim, sl)) # K^T Q
+            flops += sl * sl + 10 # Normalise by 1 / sqrt(d)
+        else:
+            flops += sl * (2 * head_dim - 1) # Only compute the new attention values
+            flops += sl + 10 # Normalise only the relevant new ones
 
+        # Softmax the attentions matrix for each column
+        flops += sl * sl # add the attention mask to each value in the attention matrix
+        flops += sl * ((10 * sl) + (sl - 1) + (sl)) # softmax columns num_cols * (exp each element + add them together + divide each one)
+        flops += flops_matrix_mult((sl, sl), (sl, head_dim)) # attention @ values
+
+    # recombination linear layer after each attention head is done
+    flops += flops_linear(ed, ed, sl, bias=False)
     return flops
 
-def flops_transformer(embedding_dimension=embedding_dimension,
-                    hidden_features=hidden_features,
-                    sequence_length=sequence_length,
-                    attention_heads=attention_heads,
-                    mode=mode,
-                    lora_rank=lora_rank):
+def flops_transformer_block(config: FlopsConfig) -> int:
     """
-    Compute the FLOPs for a full transformer block, including attention and MLP.
-
-    Args:
-        embedding_dimension (int): Dimension of the embedding vectors (should be divisible by `attention_heads`).
-        hidden_features (int): Hidden dimension of the MLP block.
-        sequence_length (int): Length of the input sequence.
-        attention_heads (int): Number of attention heads.
-
-    Returns:
-        int: Total FLOPs for the transformer block.
+    Compute FLOPs for a full transformer block, including self-attention and MLP.
     """
+    ed, sl = config.embedding_dimension, config.sequence_length
     flops = 0
-    flops += flops_rmsnorm(in_features=embedding_dimension, sequence_length=sequence_length) # input norm flops
-    flops += flops_self_atte(embedding_dimension=embedding_dimension, sequence_length=sequence_length, attention_heads=attention_heads, mode=mode, lora_rank=lora_rank) # self attention flops
-    flops += embedding_dimension * sequence_length # Flops for adding the residual
-
-    flops += flops_rmsnorm(in_features=embedding_dimension, sequence_length=sequence_length) # post attention norm flops
-    flops += flops_mlp(in_features=embedding_dimension, hidden_features=hidden_features, out_features=embedding_dimension, sequence_length=sequence_length) # Flops for mlp
-    flops += embedding_dimension * sequence_length # flops for adding the residual
-
+    flops += flops_rmsnorm(ed, sl)
+    flops += flops_self_attention(config)
+    flops += ed * sl
+    flops += flops_rmsnorm(ed, sl)
+    flops += flops_mlp(config)
+    flops += ed * sl
     return flops
 
-def flops_lora(embedding_dimension=embedding_dimension,
-               lora_rank=lora_rank,
-               sequence_length=sequence_length):
+def flops_embedding(config: FlopsConfig) -> int:
     """
-    Placeholder for FLOPs of a LoRA (Low-Rank Adaptation) layer.
-
-    Returns:
-        int: Placeholder value or computed FLOPs in a real implementation.
+    Estimate FLOPs for computing token embeddings.
     """
-    flops = 0
-    if lora_rank > 0:
-        flops += flops_linear(in_features=embedding_dimension, out_features=lora_rank, sequence_length=sequence_length, bias=False) # First matrix multiplication
-        flops += flops_linear(in_features=lora_rank, out_features=embedding_dimension, sequence_length=sequence_length, bias=False) # Second matrix multiplication
-        flops += 2 * embedding_dimension * sequence_length # multiplying by alpha and adding the lora offset at the end
-    return flops
-
-def flops_embedding(embedding_dimension=embedding_dimension,
-                    sequence_length=sequence_length,
-                    vocabulary_size=vocabulary_size,
-                    lookup_table=False):
-    """
-    Estimate FLOPs for computing token embeddings via a vocabulary matrix.
-
-    Args:
-        embedding_dimension (int): Dimension of the embedding vectors.
-        sequence_length (int): Length of the input sequence.
-        vocabulary_size (int): Size of the vocabulary.
-        lookup_table (bool): If true, treats the embedding as free wrt flops. If false, treats the embedding as a matrix multiplication.
-
-    Returns:
-        int: Total FLOPs for embedding computation.
-    """
-    if lookup_table:
+    if config.lookup_table:
         return 0
+    return config.sequence_length * config.embedding_dimension * (2 * config.vocabulary_size - 1)
 
-    flops = sequence_length * embedding_dimension * (2 * vocabulary_size - 1) # flops for onehot token matrix @ vocab matrix to get embedding of sequence
-    return flops
-
-def flops_qwen(embedding_dimension=embedding_dimension,
-               hidden_features=hidden_features,
-               sequence_length=sequence_length,
-               attention_heads=attention_heads,
-               transformer_layers=transformer_layers,
-               vocabulary_size=vocabulary_size,
-               lookup_table=lookup_table,
-               mode=mode,
-               generation_length=generation_length,
-               batch_size=batch_size,
-               lora_rank=lora_rank):
+def flops_qwen(config: FlopsConfig) -> int:
     """
-    Estimate total FLOPs for a QWen-like transformer model end-to-end.
-
-    Args:
-        embedding_dimension (int): Size of the embedding and transformer input/output.
-        hidden_features (int): Hidden layer size in the MLPs.
-        sequence_length (int): Length of the input sequence.
-        attention_heads (int): Number of attention heads.
-        transformer_layers (int): Number of transformer layers.
-        vocabulary_size (int): Vocabulary size for the output logits.
-        lookup_table (bool): If true, treats the embedding as free wrt flops. If false, treats the embedding as a matrix multiplication.
-        mode (str): [`training`, `inference`], Whether or not the model is being used for training or inference.
-        generation_length (int): Number of tokens we are asking the model to predict.
-        batch_size (int): Number of sequences in the batch.
-
-    Returns:
-        int: Total FLOPs for the model.
+    Estimate total FLOPs for a QWen-like transformer model.
     """
-    if mode == "training":
-        flops = 0
-        flops += flops_embedding(embedding_dimension=embedding_dimension, sequence_length=sequence_length, vocabulary_size=vocabulary_size, lookup_table=lookup_table) # flops for converting tokens into embedding vectors
-        
-        for _ in range(transformer_layers):
-            flops += flops_transformer(embedding_dimension=embedding_dimension,
-                                    hidden_features=hidden_features,
-                                    sequence_length=sequence_length,
-                                    attention_heads=attention_heads,
-                                    mode=mode,
-                                    lora_rank=lora_rank)
-        
-        flops += flops_rmsnorm(in_features=embedding_dimension, sequence_length=sequence_length) # flops for one more normalisation step
+    flops = 0
+    mode = config.mode
 
-        flops += flops_linear(in_features=embedding_dimension, out_features=vocabulary_size, sequence_length=sequence_length, bias=True) # lm_head flops
+    # Config for a full pass with no KV
+    first_pass_config = config
+    first_pass_config.mode = "training"
 
-        return flops * 3 * batch_size
-    elif mode == "inference":
-        flops = 0
+    # First pass through the network
+    flops += flops_embedding(first_pass_config) # Embedding
 
-        flops += flops_embedding(embedding_dimension=embedding_dimension, sequence_length=sequence_length, vocabulary_size=vocabulary_size, lookup_table=lookup_table) # flops for converting tokens into embedding vectors
-        
-        for _ in range(transformer_layers):
-            flops += flops_transformer(embedding_dimension=embedding_dimension,
-                                    hidden_features=hidden_features,
-                                    sequence_length=sequence_length,
-                                    attention_heads=attention_heads,
-                                    mode=mode)
-        
-        flops += flops_rmsnorm(in_features=embedding_dimension, sequence_length=sequence_length) # flops for one more normalisation step
+    for _ in range(config.transformer_layers): # 24 Transformer Blocks
+        flops += flops_transformer_block(first_pass_config)
 
-        flops += flops_linear(in_features=embedding_dimension, out_features=vocabulary_size, sequence_length=1, bias=True) # lm_head flops
+    flops += flops_rmsnorm(first_pass_config.embedding_dimension, first_pass_config.sequence_length) # Normalises
+    flops += flops_linear(first_pass_config.embedding_dimension, first_pass_config.vocabulary_size, first_pass_config.sequence_length) # LM Head
 
-        for t in range(generation_length - 1):
-            flops += flops_embedding(embedding_dimension=embedding_dimension,
-                                     sequence_length=1,
-                                     vocabulary_size=vocabulary_size,
-                                     lookup_table=lookup_table)
+    if mode == "training": # If training, we just do batch size forward passes and then one backpass
+        return flops * (config.batch_size + 2) # Return flops for each sequence in batch and +2 for backpass
+
+    elif mode == "inference": # If inferencing we then run KV-Cached forward passes with reduced computational cost
+        second_pass_config = config
+        second_pass_config.mode = "inference"
+
+        for _ in range(second_pass_config.generation_length - 1): # The remaining generation passes
+            flops += flops_embedding(second_pass_config) # embedding
+            for _ in range(second_pass_config.transformer_layers): # kv-cache transformer layers
+                flops += flops_transformer_block(second_pass_config)
             
-            for _ in range(transformer_layers):
-                flops += flops_transformer(embedding_dimension=embedding_dimension,
-                                           hidden_features=hidden_features,
-                                           sequence_length=sequence_length,
-                                           attention_heads=attention_heads,
-                                           mode=mode)
-            
-            flops += flops_linear(in_features=embedding_dimension, out_features=vocabulary_size, sequence_length=1, bias=True) # Flops for passing final embedding vector through lm_head
+            flops += flops_rmsnorm(second_pass_config.embedding_dimension, 1) # Noramlise just the final token because we just want to predict only next token
+            flops += flops_linear(second_pass_config.embedding_dimension, second_pass_config.vocabulary_size, 1) # Pass through LM_head
 
         return flops
-    else:
-        raise ValueError(f"Mode `{mode}` not valid.")
 
-def printsf(value,
-            sf=3,
-            prefix=None,
-            add_newline=False):
-    """
-    Prints the given value formatted to 3 significant figures.
-
-    Parameters:
-        value (float or int): The numeric value to be printed with 3 significant figures.
-    """
-    if prefix is None:
-        print(f"{value:.{sf}g}")
     else:
-        print(f"{prefix}: {value:.{sf}g}")
-    if add_newline:
-        print("")
+        raise ValueError(f"Invalid mode: {mode}")

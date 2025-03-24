@@ -136,7 +136,7 @@ def reduce_head(model, token_map):
     return model
 
 
-def reduce_vocabulary(model, tokenizer, valid_words=list("0123456789,.;")):
+def reduce_vocabulary(model, tokenizer, valid_words=list("0123456789,;")):
     model, token_map = reduce_embedding(model, tokenizer, valid_words)
     model = reduce_head(model, token_map)
     model.config.vocab_size = len(valid_words)
