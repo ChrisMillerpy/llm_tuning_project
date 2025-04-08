@@ -181,15 +181,23 @@ def chunk_sequences(texts, tokenizer, converter, max_length=512, stride=256):
 
         seq_ids = encoding.input_ids[0]
 
+        print(f"{idx}: {len(text)}")
+
         # Create sliding windows to further divide the data into chunks:
-        for i in range(0, len(seq_ids), stride):
-            # If our window overshoots the series
-            if i + max_length > len(seq_ids):
-                # reset to perfectly cover last part
-                i = len(seq_ids) - max_length
+        for i in range(0, seq_ids.shape[0], stride):
             # slice the sequence to make the chunk
             chunk = seq_ids[i : i + max_length]
+            bail = False
+            if chunk.shape[0] != max_length:
+                bail = True
+                old_size = chunk.shape[0]
+                chunk = torch.concat((torch.zeros(max_length - old_size).long(), chunk))
+                new_size = chunk.shape[0]
+                print(f" - {old_size} -> {new_size}")
 
             all_input_ids.append(chunk)
+
+            if bail: break
+
 
     return torch.stack(all_input_ids)

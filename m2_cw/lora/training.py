@@ -36,7 +36,8 @@ def train_LoRA(config: LoRAConfig, experiment_name, save_path):
 
     # Initialise WandB
     wandb.init(project="LoRA_Qwen",
-               name=experiment_name)
+               name=experiment_name,
+               config=config)
     wandb.watch(model, log="all", log_freq=10)
     
     # Process the data into sequences of text

@@ -124,6 +124,7 @@ def flops_self_attention(config: FlopsConfig) -> int:
             flops += flops_linear(head_dim, head_dim, 1) # V_N+1
 
         flops += 2 * head_dim * sl # Adding lora result back onto K and Q matrices
+        flops += 2 * sl * head_dim # Adding ROPE
 
         if mode == "training":
             flops += flops_matrix_mult((sl, head_dim), (head_dim, sl)) # K^T Q

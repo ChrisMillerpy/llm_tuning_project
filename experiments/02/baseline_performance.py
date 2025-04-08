@@ -26,7 +26,7 @@ if __name__ == "__main__":
     save_path = Path(__file__).parent
     now = datetime.now()
     timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
-    file_path = save_path / f"forecast_{timestamp}.csv"
+    file_path = save_path / f"forecast_{timestamp}.txt"
 
     # Run the evaluation
     evaluate(model, tokenizer, converter, "mps", val_texts, file_path)
