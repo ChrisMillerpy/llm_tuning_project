@@ -18,6 +18,7 @@ env/
 *.tmp
 *.swp
 *.swo
+requirements.txt
 wandb/
 
 # HDF5 files
