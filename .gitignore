@@ -25,6 +25,9 @@ wandb/
 
 # PDF and other generated documents
 *.pdf
+main.pdf
+llmtime.pdf
+qwen.pdf
 
 # Dependency files
 pip-wheel-metadata/
